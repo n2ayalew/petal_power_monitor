@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <time.h>
 
 #define ADC_BITS 16
 
@@ -52,6 +53,7 @@ typedef struct powersc {
 	double Irms;
 	double Vraw;
 	double Iraw;
+	struct timespec *tv;
 } powersc_t;
 
 union {

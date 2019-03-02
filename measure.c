@@ -11,6 +11,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <curl/curl.h>
 
 #include "spiComm.h"
 #include "measure.h"
@@ -54,6 +55,7 @@ static uint32_t oldest_sample_ct2;
 /* Synchronization */
 sem_t buf_empty;
 
+/* Debugging function */
 static void print_buffer(uint8_t *buf, int length)
 {
 	//printf("Buffer: ");
@@ -64,6 +66,11 @@ static void print_buffer(uint8_t *buf, int length)
 	puts("");
 }
 
+/* Integer timestamp to floating point */
+static inline double get_time_sec(time_t tv_sec, long tv_nsec) {
+	return (double)tv_sec + ((double)tv_nsec/1000000000);
+
+}
 /*
  * Helper function used for testing sensor measurments. Returns value from
  * the buffer of the given channel as an int. This simplifies emonlib port.
@@ -401,6 +408,7 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 		if (lastVCross != checkVCross) crossCount++;
 	}
 
+	clock_gettime(CLOCK_REALTIME, powerl_p->tv);
 	//-------------------------------------------------------------------
 	// 3) Post loop calculations
 	//-------------------------------------------------------------------
@@ -483,9 +491,63 @@ void *power_monitor() {
 	powersc_t pscl = {0};
 	powersc_t pscr = {0};
 
+	struct timespec tv;
+	CURL *curl;
+	CURLcode res;
+
+	/* In windows, this will init the winsock stuff */ 
+	if (curl_global_init(CURL_GLOBAL_ALL)) {
+		fprintf(stderr, "curl_global_init failed... exiting.\n");
+		pthread_exit(NULL);
+	}
+
+	/* get a curl handle */ 
+	curl = curl_easy_init();
+	if (!curl) {
+		printf("[main] could not initialize curl");
+		abort();
+	}
+
+	const char *format_str = "time=%f&current1=%f&voltage=%f&realP1=%f&current2=%f&realP2=%f";
+	char * post_str = (char*)malloc(sizeof(double)*6 + strlen(format_str));
+
+	/* First set the URL that is about to receive our POST. This URL can
+	 *        just as well be a https:// URL if that is what should receive the
+	 *               data. */ 
+	curl_easy_setopt(curl, CURLOPT_URL, "https://flask-petal.herokuapp.com/");
+	curl_easy_setopt(curl, CURLOPT_POST, 1L);	
+
+	/* some servers don't like requests that are made without a user-agent
+	 *        field, so we provide one */
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+
+	pscl.tv = &tv;
+	pscr.tv = &tv;
 	while (true) {
 		calcVI(default_crossings, &pscl, &pscr, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
 		printf("Vrms = %f, Irms Left = %f\n", pscl.Vrms, pscl.Irms);
 		printf("Vrms = %f, Irms Right = %f\n", pscr.Vrms, pscr.Irms);
+
+		sprintf(post_str,
+				format_str,
+				get_time_sec(tv.tv_sec, tv.tv_nsec),
+				pscl.Irms,
+				pscl.Vrms,
+				pscl.realPower,
+				pscr.Irms,
+				pscr.realPower);
+
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post_str));
+		/* Now specify the POST data */
+		curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, post_str);
+		/* Perform the request, res will get the return code */ 
+		res = curl_easy_perform(curl);
+		/* Check for errors */ 
+		if(res != CURLE_OK) {
+			fprintf(stderr, "curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+		}
 	}
+
+	curl_easy_cleanup(curl);
+	curl_global_cleanup();
 }

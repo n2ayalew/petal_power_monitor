@@ -1,6 +1,6 @@
 CC=gcc
-CFLAGS= -I -std=c99
-LDFLAGS=-lm -lpthread
+CFLAGS= -I -std=c99 -Wall
+LDFLAGS=-lm -lpthread -lcurl
 DEPS = measure.h spiComm.h
 
 %.o: %.c $(DEPS)
