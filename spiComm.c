@@ -134,7 +134,7 @@ int spiSetupMode (int channel, int speed, int mode)
 
 	printf("spi mode: %d\n", mode);
 	printf("bits per word: %d\n", spiBPW);
-	printf("max speed: %d KHz\n", speed, speed/1000);
+	printf("max speed: %d KHz\n", speed/1000);
 	return fd ;
 }
 

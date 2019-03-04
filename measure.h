@@ -9,7 +9,6 @@
 
 #define ADC_COUNTS  (1 << ADC_BITS)
 
-#define POWER_MEASURMENT_TEST 0
 #define VOLTAGE_CALIBRATION 149.4 // Calibrated at home
 #define VOLTAGE_CALIBRATION_SCHOOL_P1 145.4 // Calibrated at school
 #define VOLTAGE_CALIBRATION_SCHOOL_P2 150.1 // Calibrated at school

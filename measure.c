@@ -16,10 +16,14 @@
 #include "spiComm.h"
 #include "measure.h"
 
+#define POWER_MEASURMENT_TEST		0
+#define CURL_VERBOSE_DEBUG_LEVEL	0L
+#define POWER_DEBUG					0
+
 #define ADC_FREQ 500000
 #define VIN_FREQ 60
 //#define max_samples ((size_t)((1.0/VIN_FREQ)/(1.0/ADC_FREQ)) * 2)
-#define max_samples 16667
+#define max_samples 20000 //16667
 
 static void parse_opts(int argc, char *argv[]);
 void powerMonitorTest();
@@ -32,7 +36,7 @@ void *power_monitor();
 // channel is the wiringPi name for the chip select (or chip enable) pin.
 // Set this to 0 or 1, depending on how it's connected.
 static uint8_t channel = 0;
-static uint8_t mode = 1;
+//static uint8_t mode = 1;
 static uint32_t speed = 500000;
 static unsigned int default_crossings = 20;
 static double PGA_GAIN_I = 0.625;
@@ -54,8 +58,10 @@ static uint32_t oldest_sample_ct2;
 
 /* Synchronization */
 sem_t buf_empty;
+sem_t buf_full;
 
 /* Debugging function */
+#if POWER_MEASURMENT_TEST
 static void print_buffer(uint8_t *buf, int length)
 {
 	//printf("Buffer: ");
@@ -65,6 +71,7 @@ static void print_buffer(uint8_t *buf, int length)
 	}
 	puts("");
 }
+#endif
 
 /* Integer timestamp to floating point */
 static inline double get_time_sec(time_t tv_sec, long tv_nsec) {
@@ -78,37 +85,41 @@ static inline double get_time_sec(time_t tv_sec, long tv_nsec) {
 static inline int analogRead(uint8_t channel) {
 	//int i = current_sample; current_sample++;
 	int reading;
-	sem_wait(&buf_empty);
+	//sem_wait(&buf_empty);
 
 	switch(channel) {
 		case CTR_CHANNEL:
-			if (current_sample_ct1 == oldest_sample_ct1) {
+			/*if (current_sample_ct1 == oldest_sample_ct1) {
 				printf("Trying to get too many samples");
 				return -1;
-			}
+			}*/
 			reading = ct1_buf[oldest_sample_ct1];
-			oldest_sample_ct1++;
+			//oldest_sample_ct1++;
+			//oldest_sample_ct1 = (oldest_sample_ct1 + 1) % max_samples;
 			break;
 		case CTL_CHANNEL:
-			if (current_sample_ct2 == oldest_sample_ct2) {
+			/*if (current_sample_ct2 == oldest_sample_ct2) {
 				printf("Trying to get too many samples\n");
 				return -1;
-			}
+			}*/
 			reading = ct2_buf[oldest_sample_ct2];
-			oldest_sample_ct2++;
+			//oldest_sample_ct2 = (oldest_sample_ct2 + 1) % max_samples;
 			break;
 		case PT_CHANNEL:
-			if (oldest_sample_pt == max_samples) {
+			/*if (current_sample_pt == oldest_sample_pt) {
 				printf("Trying to get too many samples\n");
 				return -1;
-			}
+			}*/
 			reading = pt_buf[oldest_sample_pt];
-			oldest_sample_pt++;
+			//oldest_sample_pt = (oldest_sample_pt + 1) % max_samples;
 			break;
 		default:
 			reading =  0;
 			break;
 	}
+	oldest_sample_ct1 = (oldest_sample_ct1 + 1) % max_samples;
+	oldest_sample_ct2 = (oldest_sample_ct2 + 1) % max_samples;
+	oldest_sample_pt = (oldest_sample_pt + 1) % max_samples;
 	return reading;
 }
 
@@ -161,7 +172,7 @@ static inline void enter_auto_sequence_mode()
 int32_t auto_channel_read()
 {
 	uint32_t tmp = ADS8688_CMD_REG(ADS8688_CMD_REG_NOOP);
-	tmp <= ADS8688_CMD_DONT_CARE_BITS;
+	//tmp <= ADS8688_CMD_DONT_CARE_BITS;
 	iobuf.d32 = htobe32(tmp);
 	spiDataRW(channel, &iobuf.d8[0], &iobuf.d8[0], 4);
 	return be32toh(iobuf.d32) & 0xffff;
@@ -187,14 +198,19 @@ int main(int argc, char *argv[])
 
 	/* Power down channel 4 */
 	prog_result = ads8688_prog_write(fd, CHANNEL_PWR_DWN_ADDR, 0xf8);
+	printf("power down channel response: %x\n", prog_result);
 	/* Enable auto scan for channels 0, 1 and 2 */
 	prog_result = ads8688_prog_write(fd, AUTO_SEQ_EN_ADDR, 0x07);
+	printf("enable channels response: %x\n", prog_result);
 	/* Set ranges for CT's on channel 1 and channel 2 */
 	prog_result = ads8688_prog_write(fd, C1RANGE, ADS8688_REG_PLUSMINUS0625VREF);
+	printf("set CT_L range response: %x\n", prog_result);
 	prog_result = ads8688_prog_write(fd, C2RANGE, ADS8688_REG_PLUSMINUS0625VREF);
+	printf("set CT_R range response: %x\n", prog_result);
 	PGA_GAIN_I = 0.625;
 	/* Set range for PT on channel 0 */
 	prog_result = ads8688_prog_write(fd, C0RANGE, ADS8688_REG_PLUS125VREF);
+	printf("set PT range response: %x\n", prog_result);
 
 	// This call tries to estimate the phase error introduced into
 	// the voltage reading due to the ADC multiplexer. This was taken from
@@ -223,6 +239,7 @@ int main(int argc, char *argv[])
 #endif
 
 	sem_init(&buf_empty, 0, 0);	
+	sem_init(&buf_full, 0, max_samples);	
 
 	pthread_t power_thread;
 	if (pthread_create(&power_thread, NULL, power_monitor, NULL) < 0) {
@@ -235,6 +252,7 @@ int main(int argc, char *argv[])
 
 	/* Automatically sequence through channels and read signal */
 	while (true) {
+		sem_wait(&buf_full);
 		pt_buf[current_sample_pt] = auto_channel_read();
 		ct2_buf[current_sample_ct2] = auto_channel_read();
 		ct1_buf[current_sample_ct1] = auto_channel_read(); 
@@ -316,8 +334,8 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 	unsigned int crossCount = 0; // Used to measure number of times threshold is crossed.
 	unsigned int numberOfSamples = 0; // This is now incremented
 	double V_RATIO = VCAL *((SupplyVoltage*PGA_GAIN_V) / (ADC_COUNTS));
-	double I_RATIO = ICAL *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
-	double I_RATIR = ICAL *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
+	double I_RATIO_L = ICAL *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
+	double I_RATIO_R = ICAL *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
 	
 
 	//---------------------------------------------------------------
@@ -327,7 +345,9 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 
 	while(1)                                   //the while loop...
 	{
+		sem_wait(&buf_empty);
 		startV = analogRead(inPinV); // using the voltage waveform
+		sem_post(&buf_full);
 		if ((startV < (ADC_COUNTS*0.55)) && (startV > (ADC_COUNTS*0.45))) break;  //check its within range
 		//if ((millis()-start)>timeout) break;
 	}
@@ -337,7 +357,7 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 	//-------------------------------------------------------------------------------------------------------------------------
 	//start = millis();
 
-	while ((crossCount < crossings) && (current_sample_pt < max_samples))// && ((millis()-start)<timeout))
+	while ((crossCount < crossings)) //&& (current_sample_pt < max_samples))// && ((millis()-start)<timeout))
 	{
 		numberOfSamples++;                       //Count number of times looped.
 		lastFilteredV = filteredV;               //Used for delay/phase compensation
@@ -345,9 +365,11 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 		//-----------------------------------------------------------------------------
 		// A) Read in raw voltage and current samples
 		//-----------------------------------------------------------------------------
+		sem_wait(&buf_empty);
 		sampleV = analogRead(inPinV); //Read in raw voltage signal
 		sampleI = analogRead(inPinIl); // Read in left raw current signal
 		sampleIr = analogRead(inPinIr); // Read in right raw current signal
+		sem_post(&buf_full);
 
 		//-----------------------------------------------------------------------------
 		// B) Apply digital low pass filters to extract the 2.5 V or 1.65 V dc offset,
@@ -360,11 +382,11 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 
 		offsetI = offsetI + ((sampleI-offsetI)/ADC_COUNTS);
 		filteredI = sampleI - offsetI;
-		powerl_p->Iraw = I_RATIO * filteredI;
+		powerl_p->Iraw = I_RATIO_L * filteredI;
 
 		offsetIr = offsetIr + ((sampleIr-offsetIr)/ADC_COUNTS);
-		filteredI = sampleIr - offsetIr;
-		powerr_p->Iraw = I_RATIOR * filteredIr;
+		filteredIr = sampleIr - offsetIr;
+		powerr_p->Iraw = I_RATIO_R * filteredIr;
 		
 		//-----------------------------------------------------------------------------
 		// C) Root-mean-square method voltage
@@ -416,17 +438,17 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 	// Calibration coefficients applied.
 
 	powerl_p->Vrms = V_RATIO * sqrt(sumV / (double)numberOfSamples);
-	powerl_p->Irms = I_RATIO * sqrt(sumI / (double)numberOfSamples);
+	powerl_p->Irms = I_RATIO_L * sqrt(sumI / (double)numberOfSamples);
 
-	powerr_p->Vrms = V_RATIOR * sqrt(sumV / (double)numberOfSamples);
-	powerr_p->Irms = I_RATIOR * sqrt(sumIr / (double)numberOfSamples);
+	powerr_p->Vrms = V_RATIO * sqrt(sumV / (double)numberOfSamples);
+	powerr_p->Irms = I_RATIO_R * sqrt(sumIr / (double)numberOfSamples);
 
 	//Calculation power values
-	powerl_p->realPower = V_RATIO * I_RATIO * sumP / (double)numberOfSamples;
-	powerl_p->apparentPower = power_p->Vrms * power_p->Irms;
-	powerl_p->powerFactor = power_p->realPower / power_p->apparentPower;
+	powerl_p->realPower = V_RATIO * I_RATIO_L * sumP / (double)numberOfSamples;
+	powerl_p->apparentPower = powerl_p->Vrms * powerl_p->Irms;
+	powerl_p->powerFactor = powerl_p->realPower / powerl_p->apparentPower;
 
-	powerr_p->realPower = V_RATIO * I_RATIOR * sumPr / (double)numberOfSamples;
+	powerr_p->realPower = V_RATIO * I_RATIO_R * sumPr / (double)numberOfSamples;
 	powerr_p->apparentPower = powerr_p->Vrms * powerr_p->Irms;
 	powerr_p->powerFactor = powerr_p->realPower / powerr_p->apparentPower;
 	//--------------------------------------------------------------------------------------
@@ -466,7 +488,7 @@ double calcIrms(unsigned int number_of_samples, uint8_t inPinI)
 }
 
 void powerMonitorTest() {
-	powersc_t psc = {0};
+	powersc_t pscL = {0};
 	powersc_t pscR = {0};
 
 	/* Reset auto sequence */
@@ -476,15 +498,29 @@ void powerMonitorTest() {
 		pt_buf[current_sample] = auto_channel_read();
 		ct2_buf[current_sample] = auto_channel_read();
 		ct1_buf[current_sample] = auto_channel_read();
+		// posting to semaphore in single thread cause I'm lazy
+		sem_post(&buf_empty);
 	}
 
-	current_sample = 0;
-	calcVI(20, &psc, PT_CHANNEL, CTL_CHANNEL);
-	current_sample_pt = 0;
-	calcVI(20, &pscR, PT_CHANNEL, CTR_CHANNEL);
+	calcVI(default_crossings, &pscL, &pscR, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
+	//current_sample = 0;
+	//calcVI(20, &pscL, PT_CHANNEL, CTL_CHANNEL);
+	//current_sample_pt = 0;
+	//calcVI(20, &pscR, PT_CHANNEL, CTR_CHANNEL);
 
-	printf("Vrms = %f, Irms Left = %f\n", psc.Vrms, psc.Irms);
+	printf("Vrms = %f, Irms Left = %f\n", pscL.Vrms, pscL.Irms);
 	printf("Vrms = %f, Irms Right = %f\n", pscR.Vrms, pscR.Irms);
+}
+
+/****************************************************************************/
+/* routine used by curl to read from the network */
+
+/* curl calls this to transfer data from the network into RAM */
+static size_t curl_write_cb(char * ptr, size_t size, size_t nmemb, void *userdata) {
+#if CURL_VERBOSE_DEBUG_LEVEL
+	fprintf(stdout, "post response: %s\n", ptr);
+#endif
+	return size * nmemb;
 }
 
 void *power_monitor() {
@@ -510,6 +546,7 @@ void *power_monitor() {
 
 	const char *format_str = "time=%f&current1=%f&voltage=%f&realP1=%f&current2=%f&realP2=%f";
 	char * post_str = (char*)malloc(sizeof(double)*6 + strlen(format_str));
+	char * post_response = (char*)malloc(sizeof(double)*6 + strlen(format_str));
 
 	/* First set the URL that is about to receive our POST. This URL can
 	 *        just as well be a https:// URL if that is what should receive the
@@ -520,14 +557,18 @@ void *power_monitor() {
 	/* some servers don't like requests that are made without a user-agent
 	 *        field, so we provide one */
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+	curl_easy_setopt(curl, CURLOPT_VERBOSE, CURL_VERBOSE_DEBUG_LEVEL);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, post_response);
 
 	pscl.tv = &tv;
 	pscr.tv = &tv;
 	while (true) {
 		calcVI(default_crossings, &pscl, &pscr, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
-		printf("Vrms = %f, Irms Left = %f\n", pscl.Vrms, pscl.Irms);
+#if POWER_DEBUG
+		printf("Vrms = %f, Irms Left = %f, ", pscl.Vrms, pscl.Irms);
 		printf("Vrms = %f, Irms Right = %f\n", pscr.Vrms, pscr.Irms);
-
+#endif
 		sprintf(post_str,
 				format_str,
 				get_time_sec(tv.tv_sec, tv.tv_nsec),
@@ -539,7 +580,7 @@ void *power_monitor() {
 
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post_str));
 		/* Now specify the POST data */
-		curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, post_str);
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_str);
 		/* Perform the request, res will get the return code */ 
 		res = curl_easy_perform(curl);
 		/* Check for errors */ 
