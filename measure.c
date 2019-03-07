@@ -13,6 +13,8 @@
 #include <semaphore.h>
 #include <curl/curl.h>
 
+// run helgrind to check deadlock conditions
+
 #include "spiComm.h"
 #include "measure.h"
 
@@ -221,10 +223,12 @@ int main(int argc, char *argv[])
 	// of our estimated error to a full period delay, which is 6.
 	PHASECAL = 1.0 + (theoreticalPhaseError/6.0);
 	//PHASECAL = 1.7; // from tutorial
+	PHASECAL = 1;
 
 	VCAL = VOLTAGE_CALIBRATION_SCHOOL_P2;
-	ICAL = CURRENT_CALIBRATION;
-	printf("PHASECAL: %f, VCAL: %f, ICAL: %f\n", PHASECAL, VCAL, ICAL);
+	ICAL_L = CURRENT_CALIBRATION_L;
+	ICAL_R = CURRENT_CALIBRATION_R;
+	printf("PHASECAL: %f, VCAL: %f, ICAL_L: %f, ICAL_R: %f\n", PHASECAL, VCAL, ICAL_L, ICAL_R);
 
 	current_sample_pt = 0;
 	current_sample_ct1 = 0;
@@ -256,6 +260,7 @@ int main(int argc, char *argv[])
 		pt_buf[current_sample_pt] = auto_channel_read();
 		ct2_buf[current_sample_ct2] = auto_channel_read();
 		ct1_buf[current_sample_ct1] = auto_channel_read(); 
+		//printf("right ADC: %d, left ADC:  %d\n", ct1_buf[current_sample_ct1], ct2_buf[current_sample_ct2]);
 		current_sample_pt = (current_sample_pt + 1) % max_samples;
 		current_sample_ct2 = (current_sample_ct2 + 1) % max_samples;
 		current_sample_ct1 = (current_sample_ct1 + 1) % max_samples;
@@ -317,25 +322,25 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 {
 	double sqV = 0, sumV = 0, sqI = 0, sumI = 0, instP = 0, sumP = 0; //sq = squared, sum = Sum, inst = instantaneous
 	double sqIr = 0, sumIr = 0, instPr = 0, sumPr = 0;
-	int startV; // Instantaneous voltage at start of sample window.
-	int sampleV; //sample_ holds the raw analog read value
-	int sampleI;
-	int sampleIr;
+	int startV = 0; // Instantaneous voltage at start of sample window.
+	int sampleV = 0; //sample_ holds the raw analog read value
+	int sampleI = 0;
+	int sampleIr = 0;
 	bool lastVCross = false, checkVCross = false; // Used to measure number of times threshold is crossed.
 	double lastFilteredV, filteredV = 0; // Filtered is the raw analog value minus the DC offset
-	double filteredI;
-	double filteredIr;
+	double filteredI = 0;
+	double filteredIr = 0;
 	double offsetV = ADC_COUNTS>>1; // Low-pass filter output
 	double offsetI = (ADC_COUNTS>>1);
 	double offsetIr = (ADC_COUNTS>>1);
-	double phaseShiftedV; // Holds the calibrated phase shifted voltage.
+	double phaseShiftedV = 0; // Holds the calibrated phase shifted voltage.
 
 	double SupplyVoltage = ADC_VREF;//4096; // Vref
 	unsigned int crossCount = 0; // Used to measure number of times threshold is crossed.
 	unsigned int numberOfSamples = 0; // This is now incremented
 	double V_RATIO = VCAL *((SupplyVoltage*PGA_GAIN_V) / (ADC_COUNTS));
-	double I_RATIO_L = ICAL *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
-	double I_RATIO_R = ICAL *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
+	double I_RATIO_L = ICAL_L *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
+	double I_RATIO_R = ICAL_R *((SupplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
 	
 
 	//---------------------------------------------------------------
@@ -382,12 +387,11 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 
 		offsetI = offsetI + ((sampleI-offsetI)/ADC_COUNTS);
 		filteredI = sampleI - offsetI;
-		powerl_p->Iraw = I_RATIO_L * filteredI;
+		powerl_p->Iraw = filteredI;
 
 		offsetIr = offsetIr + ((sampleIr-offsetIr)/ADC_COUNTS);
 		filteredIr = sampleIr - offsetIr;
-		powerr_p->Iraw = I_RATIO_R * filteredIr;
-		
+		powerr_p->Iraw = filteredIr;
 		//-----------------------------------------------------------------------------
 		// C) Root-mean-square method voltage
 		//-----------------------------------------------------------------------------
@@ -416,6 +420,8 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 
 		instPr = phaseShiftedV * filteredIr;          //Instantaneous Power
 		sumPr += instPr;                               //Sum
+		//printf("P = %f, Pr = %f\n", sumP, sumPr);
+	//	printf("Iraw right = %f, Iraw left = %f, V = %f\n", filteredIr, filteredI, phaseShiftedV); 
 
 		//-----------------------------------------------------------------------------
 		// G) Find the number of times the voltage has crossed the initial voltage
@@ -444,11 +450,11 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 	powerr_p->Irms = I_RATIO_R * sqrt(sumIr / (double)numberOfSamples);
 
 	//Calculation power values
-	powerl_p->realPower = V_RATIO * I_RATIO_L * sumP / (double)numberOfSamples;
+	powerl_p->realPower = V_RATIO * I_RATIO_L * (double)sumP / (double)numberOfSamples;
 	powerl_p->apparentPower = powerl_p->Vrms * powerl_p->Irms;
 	powerl_p->powerFactor = powerl_p->realPower / powerl_p->apparentPower;
 
-	powerr_p->realPower = V_RATIO * I_RATIO_R * sumPr / (double)numberOfSamples;
+	powerr_p->realPower = V_RATIO * I_RATIO_R * (double)sumPr / (double)numberOfSamples;
 	powerr_p->apparentPower = powerr_p->Vrms * powerr_p->Irms;
 	powerr_p->powerFactor = powerr_p->realPower / powerr_p->apparentPower;
 	//--------------------------------------------------------------------------------------
@@ -464,7 +470,7 @@ double calcIrms(unsigned int number_of_samples, uint8_t inPinI)
 	double filteredI;
 	double sumI = 0;
 	double sqI = 0;
-	double I_RATIO = ICAL * ((supplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
+	double I_RATIO = ICAL_L * ((supplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
 
 	for (unsigned int n = 0; n < number_of_samples; n++)
 	{
@@ -518,7 +524,7 @@ void powerMonitorTest() {
 /* curl calls this to transfer data from the network into RAM */
 static size_t curl_write_cb(char * ptr, size_t size, size_t nmemb, void *userdata) {
 #if CURL_VERBOSE_DEBUG_LEVEL
-	fprintf(stdout, "post response: %s\n", ptr);
+	//fprintf(stdout, "post response: %s\n", ptr);
 #endif
 	return size * nmemb;
 }
@@ -544,7 +550,7 @@ void *power_monitor() {
 		abort();
 	}
 
-	const char *format_str = "time=%f&current1=%f&voltage=%f&realP1=%f&current2=%f&realP2=%f";
+	const char *format_str = "time=%f&current1=%f&voltage=%f&realP1=%f&current2=%f&realP2=%f&user=%u";
 	char * post_str = (char*)malloc(sizeof(double)*6 + strlen(format_str));
 	char * post_response = (char*)malloc(sizeof(double)*6 + strlen(format_str));
 
@@ -563,11 +569,17 @@ void *power_monitor() {
 
 	pscl.tv = &tv;
 	pscr.tv = &tv;
+	unsigned int userId = 0;
 	while (true) {
+		//memset(&pscl, 0, sizeof(powersc_t));
+		//memset(&pscr, 0, sizeof(powersc_t));
+		pscl.realPower = 0; pscr.realPower = 0;
+		pscl.Vrms = 0; pscr.Vrms = 0;
+		pscl.Irms = 0; pscr.Irms = 0;
 		calcVI(default_crossings, &pscl, &pscr, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
 #if POWER_DEBUG
-		printf("Vrms = %f, Irms Left = %f, ", pscl.Vrms, pscl.Irms);
-		printf("Vrms = %f, Irms Right = %f\n", pscr.Vrms, pscr.Irms);
+		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
+		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 #endif
 		sprintf(post_str,
 				format_str,
@@ -576,7 +588,8 @@ void *power_monitor() {
 				pscl.Vrms,
 				pscl.realPower,
 				pscr.Irms,
-				pscr.realPower);
+				pscr.realPower,
+				userId);
 
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post_str));
 		/* Now specify the POST data */
