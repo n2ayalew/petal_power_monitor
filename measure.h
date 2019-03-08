@@ -11,9 +11,9 @@
 
 #define VOLTAGE_CALIBRATION 149.4 // Calibrated at home
 #define VOLTAGE_CALIBRATION_SCHOOL_P1 145.4 // Calibrated at school
-#define VOLTAGE_CALIBRATION_SCHOOL_P2 150.1 // Calibrated at school
+#define VOLTAGE_CALIBRATION_SCHOOL_P2 59.7 // Calibrated at school
 #define CURRENT_CALIBRATION_L 2.1
-#define CURRENT_CALIBRATION_R 124
+#define CURRENT_CALIBRATION_R 2.1
 #define ADC_VREF 4.096
 #define BURDEN_RESISTOR_OHMS 39.0
 #define CT_TURNS 3000.0
