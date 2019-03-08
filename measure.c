@@ -35,6 +35,9 @@ void *power_monitor();
 #define CTL_CHANNEL 1
 #define CTR_CHANNEL 2
 
+char *appliance_file;
+bool data_collection = false;
+
 // channel is the wiringPi name for the chip select (or chip enable) pin.
 // Set this to 0 or 1, depending on how it's connected.
 static uint8_t channel = 0;
@@ -274,9 +277,11 @@ int main(int argc, char *argv[])
 static void print_usage(const char *prog)
 {
 	printf("Usage: %s [-cs]\n", prog);
-	puts(	"-c --chip-enable	chip enable pin (default CE0)\n"
-			"-s --speed			max speed (Hz)\n"
-			"-n --crossings		default number of crossings\n");
+	puts(	"-c --chip-enable		chip enable pin (default CE0)\n"
+			"-s --speed				max speed (Hz)\n"
+			"-n --crossings			default number of crossings\n"
+			"-d --disaggregation	collect data for disaggregation\n"
+			"-a --appliance_file 		the appliance being collected\n");
 	exit(1);
 }
 
@@ -287,6 +292,8 @@ static void parse_opts(int argc, char *argv[])
 			{ "chip-enable",	1, 0, 'c' },
 			{ "speed",			1, 0, 's' },
 			{ "crossings",		1, 0, 'n' },
+			{ "disaggregation",	1, 0, 'd'},
+			{ "appliance_file",		1, 0, 'a},
 			{ NULL,				0, 0, 0 },
 		};
 		int c;
@@ -304,6 +311,13 @@ static void parse_opts(int argc, char *argv[])
 				break;
 			case 'n':
 				default_crossings = atoi(optarg);
+				break;
+			case 'd':
+				data_collection = true;
+				break;
+			case 'a':
+				appliance_file = (char*)malloc(sizeof(char)*strlen(appliance));
+				strcpy(appliance_file, optarg);
 				break;
 			default:
 				print_usage(argv[0]);
@@ -604,4 +618,95 @@ void *power_monitor() {
 
 	curl_easy_cleanup(curl);
 	curl_global_cleanup();
+}
+
+void *data_collector() {
+	powersc_t pscl = {0};
+	powersc_t pscr = {0};
+	FILE *fp;
+	struct timespec tv;
+#if 0
+	CURL *curl;
+	CURLcode res;
+
+	/* In windows, this will init the winsock stuff */ 
+	if (curl_global_init(CURL_GLOBAL_ALL)) {
+		fprintf(stderr, "curl_global_init failed... exiting.\n");
+		pthread_exit(NULL);
+	}
+
+	/* get a curl handle */ 
+	curl = curl_easy_init();
+	if (!curl) {
+		printf("[main] could not initialize curl");
+		abort();
+	}
+#endif
+	const char *format_str = "time=%f&current1=%f&voltage=%f&realP1=%f&current2=%f&realP2=%f&user=%u";
+	if (appliance_file) {
+		fp = fopen(appliance_file, "w+");
+	} else {
+		fp = fopen("all_devices.dat", "w+");
+	}
+	//char * post_str = (char*)malloc(sizeof(double)*6 + strlen(format_str));
+	//char * post_response = (char*)malloc(sizeof(double)*6 + strlen(format_str));
+
+	/* First set the URL that is about to receive our POST. This URL can
+	 *        just as well be a https:// URL if that is what should receive the
+	 *               data. */ 
+	//curl_easy_setopt(curl, CURLOPT_URL, "https://flask-petal.herokuapp.com/");
+	//curl_easy_setopt(curl, CURLOPT_POST, 1L);	
+
+	/* some servers don't like requests that are made without a user-agent
+	 *        field, so we provide one */
+#if 0
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+	curl_easy_setopt(curl, CURLOPT_VERBOSE, CURL_VERBOSE_DEBUG_LEVEL);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, post_response);
+#endif
+	pscl.tv = &tv;
+	pscr.tv = &tv;
+	unsigned int userId = 0;
+	while (true) {
+		//memset(&pscl, 0, sizeof(powersc_t));
+		//memset(&pscr, 0, sizeof(powersc_t));
+		pscl.realPower = 0; pscr.realPower = 0;
+		pscl.Vrms = 0; pscr.Vrms = 0;
+		pscl.Irms = 0; pscr.Irms = 0;
+		calcVI(default_crossings, &pscl, &pscr, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
+#if POWER_DEBUG
+		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
+		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
+#endif
+		fprintf(fp, "%d %d %d %d\n",
+				get_time_sec(tv.tv_sec, tv.tv_nsec),
+				pscl.realPower,
+				pscl.Irms,
+				pscl.Vrms);
+								
+#if 0
+		sprintf(post_str,
+				format_str,
+				get_time_sec(tv.tv_sec, tv.tv_nsec),
+				pscl.Irms,
+				pscl.Vrms,
+				pscl.realPower,
+				pscr.Irms,
+				pscr.realPower,
+				userId);
+#endif
+		///curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post_str));
+		/* Now specify the POST data */
+		//curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_str);
+		/* Perform the request, res will get the return code */ 
+		//res = curl_easy_perform(curl);
+		/* Check for errors */ 
+		/*if(res != CURLE_OK) {
+			fprintf(stderr, "curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+		}*/
+	}
+
+	//curl_easy_cleanup(curl);
+	//curl_global_cleanup();
 }
