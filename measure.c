@@ -25,11 +25,12 @@
 #define ADC_FREQ 500000
 #define VIN_FREQ 60
 //#define max_samples ((size_t)((1.0/VIN_FREQ)/(1.0/ADC_FREQ)) * 2)
-#define max_samples 20000 //16667
+#define max_samples 50000 //16667
 
 static void parse_opts(int argc, char *argv[]);
 void powerMonitorTest();
 void *power_monitor();
+void *data_collector();
 
 #define PT_CHANNEL 0
 #define CTL_CHANNEL 1
@@ -37,7 +38,7 @@ void *power_monitor();
 
 char *appliance_file;
 bool data_collection = false;
-
+bool debug_mode = false;
 // channel is the wiringPi name for the chip select (or chip enable) pin.
 // Set this to 0 or 1, depending on how it's connected.
 static uint8_t channel = 0;
@@ -81,7 +82,10 @@ static void print_buffer(uint8_t *buf, int length)
 /* Integer timestamp to floating point */
 static inline double get_time_sec(time_t tv_sec, long tv_nsec) {
 	return (double)tv_sec + ((double)tv_nsec/1000000000);
+}
 
+static inline uint64_t get_time_nsec(time_t tv_sec, long tv_nsec) {
+	return ( (uint64_t)1000000000 * (uint64_t)tv_sec) + ((uint64_t)tv_nsec);
 }
 /*
  * Helper function used for testing sensor measurments. Returns value from
@@ -202,10 +206,14 @@ int main(int argc, char *argv[])
 	usleep(15000);
 
 	/* Power down channel 4 */
-	prog_result = ads8688_prog_write(fd, CHANNEL_PWR_DWN_ADDR, 0xf8);
+	//uint8_t off_channels = 0xf8;
+	uint8_t off_channels = 0xf1;
+	prog_result = ads8688_prog_write(fd, CHANNEL_PWR_DWN_ADDR, off_channels);
 	printf("power down channel response: %x\n", prog_result);
 	/* Enable auto scan for channels 0, 1 and 2 */
-	prog_result = ads8688_prog_write(fd, AUTO_SEQ_EN_ADDR, 0x07);
+	//uint8_t seq_channels = 0x07;
+	uint8_t seq_channels = 0x0E;
+	prog_result = ads8688_prog_write(fd, AUTO_SEQ_EN_ADDR, seq_channels);
 	printf("enable channels response: %x\n", prog_result);
 	/* Set ranges for CT's on channel 1 and channel 2 */
 	prog_result = ads8688_prog_write(fd, C1RANGE, ADS8688_REG_PLUSMINUS0625VREF);
@@ -214,7 +222,8 @@ int main(int argc, char *argv[])
 	printf("set CT_R range response: %x\n", prog_result);
 	PGA_GAIN_I = 0.625;
 	/* Set range for PT on channel 0 */
-	prog_result = ads8688_prog_write(fd, C0RANGE, ADS8688_REG_PLUS125VREF);
+	prog_result = ads8688_prog_write(fd, C3RANGE, ADS8688_REG_PLUSMINUS25VREF);
+	PGA_GAIN_V = 2.5;
 	printf("set PT range response: %x\n", prog_result);
 
 	// This call tries to estimate the phase error introduced into
@@ -228,7 +237,8 @@ int main(int argc, char *argv[])
 	//PHASECAL = 1.7; // from tutorial
 	PHASECAL = 1;
 
-	VCAL = VOLTAGE_CALIBRATION_SCHOOL_P2;
+	//VCAL = VOLTAGE_CALIBRATION_SCHOOL_P2;
+	VCAL = VOLTAGE_CALIBRATION;
 	ICAL_L = CURRENT_CALIBRATION_L;
 	ICAL_R = CURRENT_CALIBRATION_R;
 	printf("PHASECAL: %f, VCAL: %f, ICAL_L: %f, ICAL_R: %f\n", PHASECAL, VCAL, ICAL_L, ICAL_R);
@@ -249,7 +259,13 @@ int main(int argc, char *argv[])
 	sem_init(&buf_full, 0, max_samples);	
 
 	pthread_t power_thread;
-	if (pthread_create(&power_thread, NULL, power_monitor, NULL) < 0) {
+	int pthread_res; 
+	if (debug_mode || data_collection) {
+		pthread_res = pthread_create(&power_thread, NULL, data_collector, NULL);
+	} else {
+		pthread_res = pthread_create(&power_thread, NULL, power_monitor, NULL);
+	}
+	if (pthread_res < 0) {
 		perror("pthread_create failed");
 		return EXIT_FAILURE;
 	}
@@ -260,10 +276,11 @@ int main(int argc, char *argv[])
 	/* Automatically sequence through channels and read signal */
 	while (true) {
 		sem_wait(&buf_full);
-		pt_buf[current_sample_pt] = auto_channel_read();
+		//pt_buf[current_sample_pt] = auto_channel_read();
 		ct2_buf[current_sample_ct2] = auto_channel_read();
 		ct1_buf[current_sample_ct1] = auto_channel_read(); 
-		//printf("right ADC: %d, left ADC:  %d\n", ct1_buf[current_sample_ct1], ct2_buf[current_sample_ct2]);
+		pt_buf[current_sample_pt] = auto_channel_read();
+		//printf("pt ADC: %d\n", pt_buf[current_sample_pt]);
 		current_sample_pt = (current_sample_pt + 1) % max_samples;
 		current_sample_ct2 = (current_sample_ct2 + 1) % max_samples;
 		current_sample_ct1 = (current_sample_ct1 + 1) % max_samples;
@@ -281,7 +298,8 @@ static void print_usage(const char *prog)
 			"-s --speed				max speed (Hz)\n"
 			"-n --crossings			default number of crossings\n"
 			"-d --disaggregation	collect data for disaggregation\n"
-			"-a --appliance_file 		the appliance being collected\n");
+			"-f --appliance_file 	the appliance being collected\n"
+			"-t --testing 			debug mode\n");
 	exit(1);
 }
 
@@ -292,12 +310,13 @@ static void parse_opts(int argc, char *argv[])
 			{ "chip-enable",	1, 0, 'c' },
 			{ "speed",			1, 0, 's' },
 			{ "crossings",		1, 0, 'n' },
-			{ "disaggregation",	1, 0, 'd'},
-			{ "appliance_file",		1, 0, 'a},
+			{ "disaggregation",	0, 0, 'd'},
+			{ "appliance_file",	1, 0, 'a'},
+			{ "testing",		0, 0, 't'},
 			{ NULL,				0, 0, 0 },
 		};
 		int c;
-		c = getopt_long(argc, argv, "c:s:n:", lopts, NULL);
+		c = getopt_long(argc, argv, "c:s:n:df:t", lopts, NULL);
 
 		if (c == -1)
 			break;
@@ -315,9 +334,12 @@ static void parse_opts(int argc, char *argv[])
 			case 'd':
 				data_collection = true;
 				break;
-			case 'a':
-				appliance_file = (char*)malloc(sizeof(char)*strlen(appliance));
+			case 'f':
+				appliance_file = (char*)malloc(sizeof(char)*strlen(optarg));
 				strcpy(appliance_file, optarg);
+				break;
+			case 't':
+				debug_mode = true;
 				break;
 			default:
 				print_usage(argv[0]);
@@ -480,8 +502,8 @@ double calcIrms(unsigned int number_of_samples, uint8_t inPinI)
 
 	double supplyVoltage = ADC_VREF;
 	double offsetI = ADC_COUNTS>>1;
-	int sampleI;
-	double filteredI;
+	int sampleI = 0;
+	double filteredI = 0;
 	double sumI = 0;
 	double sqI = 0;
 	double I_RATIO = ICAL_L * ((supplyVoltage*PGA_GAIN_I) / (ADC_COUNTS)) * (CT_TURNS / BURDEN_RESISTOR_OHMS);
@@ -490,7 +512,9 @@ double calcIrms(unsigned int number_of_samples, uint8_t inPinI)
 	{
 		// Digital low pass filter extracts the 2.5 V or 1.65 V dc offset,
 		//  then subtract this - signal is now centered on 0 counts.
+		sem_wait(&buf_empty);
 		sampleI = analogRead(inPinI);
+		sem_post(&buf_full);
 		offsetI = offsetI + ((sampleI-offsetI)/ADC_COUNTS);
 		filteredI = sampleI - offsetI;
 		// Root-mean-square method current
@@ -642,11 +666,16 @@ void *data_collector() {
 		abort();
 	}
 #endif
-	const char *format_str = "time=%f&current1=%f&voltage=%f&realP1=%f&current2=%f&realP2=%f&user=%u";
-	if (appliance_file) {
-		fp = fopen(appliance_file, "w+");
+	//const char *format_str = "time=%f&current1=%f&voltage=%f&realP1=%f&current2=%f&realP2=%f&user=%u";
+	if (!debug_mode) {
+		printf("data collection mode\n");
+		if (appliance_file) {
+			fp = fopen(appliance_file, "w+");
+		} else {
+			fp = fopen("all_devices.dat", "w+");
+		}
 	} else {
-		fp = fopen("all_devices.dat", "w+");
+		printf("Debug mode\n");
 	}
 	//char * post_str = (char*)malloc(sizeof(double)*6 + strlen(format_str));
 	//char * post_response = (char*)malloc(sizeof(double)*6 + strlen(format_str));
@@ -667,23 +696,26 @@ void *data_collector() {
 #endif
 	pscl.tv = &tv;
 	pscr.tv = &tv;
-	unsigned int userId = 0;
+	//unsigned int userId = 0;
 	while (true) {
 		//memset(&pscl, 0, sizeof(powersc_t));
 		//memset(&pscr, 0, sizeof(powersc_t));
 		pscl.realPower = 0; pscr.realPower = 0;
 		pscl.Vrms = 0; pscr.Vrms = 0;
 		pscl.Irms = 0; pscr.Irms = 0;
+		//pscl.Irms = calcIrms(100, CTL_CHANNEL); clock_gettime(CLOCK_REALTIME, &tv);
 		calcVI(default_crossings, &pscl, &pscr, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
-#if POWER_DEBUG
-		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
-		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
-#endif
-		fprintf(fp, "%d %d %d %d\n",
+		if (debug_mode) {
+			printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
+			printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
+		} else {
+		fprintf(fp, "%f %f %f %f\n",
+				//get_time_nsec(tv.tv_sec, tv.tv_nsec),
 				get_time_sec(tv.tv_sec, tv.tv_nsec),
 				pscl.realPower,
 				pscl.Irms,
 				pscl.Vrms);
+		}
 								
 #if 0
 		sprintf(post_str,
