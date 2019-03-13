@@ -25,7 +25,7 @@
 #define ADC_FREQ 500000
 #define VIN_FREQ 60
 //#define max_samples ((size_t)((1.0/VIN_FREQ)/(1.0/ADC_FREQ)) * 2)
-#define max_samples 50000 //16667
+#define max_samples 300000 //16667
 
 static void parse_opts(int argc, char *argv[]);
 void powerMonitorTest();
@@ -93,7 +93,7 @@ static inline uint64_t get_time_nsec(time_t tv_sec, long tv_nsec) {
  */
 static inline int analogRead(uint8_t channel) {
 	//int i = current_sample; current_sample++;
-	int reading;
+	int reading = 0;
 	//sem_wait(&buf_empty);
 
 	switch(channel) {
