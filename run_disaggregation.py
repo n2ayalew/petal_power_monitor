@@ -13,6 +13,11 @@ from preprocessing import Create_combined_states, Appliance, train_test_split,cr
 from DataStore import DataStore
 import math
 
+QueueKey=8500
+PermissionsError = sysv_ipc.PermissionsError
+ExistentialError = sysv_ipc.ExistentialError
+BusyError = sysv_ipc.BusyError
+
 '''
 preprocess data
 
@@ -41,17 +46,26 @@ URL = "https://flask-petal.herokuapp.com/appliancesData"
 dstore = DataStore('/home/nathaniel/nilmtk/data/petal', 'house_5')
 dstore.create_store() # Get all channels
 
-app_test_list = []
-app_test_list.append(Appliance(1, dstore.get_channel(1))) 
+aggregate_signal = Appliance(1, dstore.get_channel(1))
 
 with open('petal_models/house_5.pkl', 'rb') as in_file:
     fhmm = pk.load(in_file)
+
 #fhmm = FHMM()
 #fhmm.import_model('petal_models/house_5_fhmm.model.txt')
-predictions = pd.DataFrame()
 
-predictions = fhmm.disaggregate(app_test_list[0].power_data, predictions, 1)
-aggregate_signal = app_test_list[0].power_data
+try:
+    mq = sysv_ipc.MessageQueue(QueueKey, sysv_ipc.IPC_CREAT, mode=0o666)
+except ExistentialError:
+    print("ERROR: message queue creation failed")
+
+
+mq_msg, priority = mq.receive(type=1)
+ts_sec_f, power_f = struct.unpack("dd", mq_msg)
+
+predictions = pd.DataFrame()
+predictions = fhmm.disaggregate(aggregate_signal.power_data, predictions, 1)
+aggregate_signal = aggregate_signal.power_data
 predictions.columns = ['hair iron', 'hair dryer', 'toaster']
 
 # data to be sent to api 
