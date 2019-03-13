@@ -13,6 +13,9 @@
 #include <semaphore.h>
 #include <curl/curl.h>
 
+#include <sys/ipc.h> 
+#include <sys/msg.h> 
+
 // run helgrind to check deadlock conditions
 
 #include "spiComm.h"
@@ -585,10 +588,26 @@ static size_t curl_write_cb(char * ptr, size_t size, size_t nmemb, void *userdat
 	return size * nmemb;
 }
 
+typedef struct {
+	long type;
+	double sample[2];
+} sample_t;
+
 void *power_monitor() {
 	powersc_t pscl = {0};
 	powersc_t pscr = {0};
 
+	key_t key=8500;
+	int msgid;
+	sample_t sample;
+	sample.type = 1;
+	size_t mq_msg_n = sizeof(double) * 2;
+	// msgget creates a message queue 
+	// and returns identifier 
+	if ((msgid = msgget(key, 0666 | IPC_CREAT)) < 0) {
+		perror("msgid failed");
+	}
+	
 	struct timespec tv;
 	CURL *curl;
 	CURLcode res;
@@ -637,6 +656,13 @@ void *power_monitor() {
 		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
 		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 #endif
+		sample.sample[0] = get_time_sec(tv.tv_sec, tv.tv_nsec);
+		sample.sample[1] = pscl.realPower;
+
+		if (msgsnd(msgid, &sample, mq_msg_n, 0) < 0) {
+			perror("msgsnd failed");
+		}
+
 		sprintf(post_str,
 				format_str,
 				get_time_sec(tv.tv_sec, tv.tv_nsec),
