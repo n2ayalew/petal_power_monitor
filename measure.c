@@ -191,7 +191,21 @@ int main(int argc, char *argv[])
 {
 	int fd;
 	uint32_t prog_result;
-
+	
+	/** default values **/
+	
+	// This call tries to estimate the phase error introduced into
+	// the voltage reading due to the ADC multiplexer. This was taken from
+	// the ADS8688/ADS8684 datasheet.
+	double theoreticalPhaseError = getTheoreticalPhaseError(3);
+	// We calculate the PHASECAL constant by finding the proportion
+	// of our estimated error to a full period delay, which is 6.
+	PHASECAL = 1.0 + (theoreticalPhaseError/6.0); //PHASECAL = 1.7; // tutorial
+	
+	VCAL = VOLTAGE_CALIBRATION; //VCAL = VOLTAGE_CALIBRATION_SCHOOL_P2;
+	ICAL_L = CURRENT_CALIBRATION_L;
+	ICAL_R = CURRENT_CALIBRATION_R;
+	PHASECAL = 1;
 	parse_opts(argc, argv);
 
 	printf("default crossings: %d\n", default_crossings);
@@ -226,21 +240,8 @@ int main(int argc, char *argv[])
 	PGA_GAIN_V = 2.5;
 	printf("set PT range response: %x\n", prog_result);
 
-	// This call tries to estimate the phase error introduced into
-	// the voltage reading due to the ADC multiplexer. This was taken from
-	// the ADS8688/ADS8684 datasheet.
-	double theoreticalPhaseError = getTheoreticalPhaseError(3);
+	
 
-	// We calculate the PHASECAL constant by finding the proportion
-	// of our estimated error to a full period delay, which is 6.
-	PHASECAL = 1.0 + (theoreticalPhaseError/6.0);
-	//PHASECAL = 1.7; // from tutorial
-	PHASECAL = 1;
-
-	//VCAL = VOLTAGE_CALIBRATION_SCHOOL_P2;
-	VCAL = VOLTAGE_CALIBRATION;
-	ICAL_L = CURRENT_CALIBRATION_L;
-	ICAL_R = CURRENT_CALIBRATION_R;
 	printf("PHASECAL: %f, VCAL: %f, ICAL_L: %f, ICAL_R: %f\n", PHASECAL, VCAL, ICAL_L, ICAL_R);
 
 	current_sample_pt = 0;
@@ -299,7 +300,11 @@ static void print_usage(const char *prog)
 			"-n --crossings			default number of crossings\n"
 			"-d --disaggregation	collect data for disaggregation\n"
 			"-f --appliance_file 	the appliance being collected\n"
-			"-t --testing 			debug mode\n");
+			"-t --testing 			debug mode\n"
+			"-v --voltage 			voltage calibration constant\n"
+			"-i --current 			current calibration constant\n"
+			"-p --phase 			phase calibration constant\n"
+			);
 	exit(1);
 }
 
@@ -313,10 +318,13 @@ static void parse_opts(int argc, char *argv[])
 			{ "disaggregation",	0, 0, 'd'},
 			{ "appliance_file",	1, 0, 'a'},
 			{ "testing",		0, 0, 't'},
+			{ "voltage",		1, 0, 'v'},
+			{ "current",		1, 0, 'i'},
+			{ "phase",			1, 0, 'p'},
 			{ NULL,				0, 0, 0 },
 		};
 		int c;
-		c = getopt_long(argc, argv, "c:s:n:df:t", lopts, NULL);
+		c = getopt_long(argc, argv, "c:s:n:df:tv:i:p", lopts, NULL);
 
 		if (c == -1)
 			break;
@@ -340,6 +348,16 @@ static void parse_opts(int argc, char *argv[])
 				break;
 			case 't':
 				debug_mode = true;
+				break;
+			case 'v':
+				VCAL = atof(optarg);
+				break;
+			case 'i':
+				ICAL = atof(optarg);
+				ICAL_L = ICAL_R = ICAL;
+				break;
+			case 'p':
+				PHASECAL = atof(optarg);
 				break;
 			default:
 				print_usage(argv[0]);
