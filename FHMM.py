@@ -304,7 +304,9 @@ class FHMM():
         Parameters
         ----------
         mains : dataframe with aggregated output
-        output_datastore : instance of nilmtk.DataStore subclass
+        output_datastore : 
+            -- old -> (instance of nilmtk.DataStore subclass)
+            -- new -> pandas.DataFrame
             For storing power predictions from disaggregation algorithm.
         sample_period : number, optional
             The desired sample period in minutes.
