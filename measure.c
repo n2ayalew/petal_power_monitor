@@ -588,7 +588,19 @@ static size_t curl_write_cb(char * ptr, size_t size, size_t nmemb, void *userdat
 void *power_monitor() {
 	powersc_t pscl = {0};
 	powersc_t pscr = {0};
-
+	double realp_avg_left = 0;
+	double realp_avg_right = 0;
+	key_t key=8500;
+	int msgid;
+	sample_t sample;
+	sample.type = 1;
+	size_t mq_msg_n = sizeof(double) * 2;
+	// msgget creates a message queue 
+	// and returns identifier 
+	if ((msgid = msgget(key, 0666 | IPC_CREAT)) < 0) {
+		perror("msgid failed");
+	}
+	
 	struct timespec tv;
 	CURL *curl;
 	CURLcode res;
@@ -626,10 +638,9 @@ void *power_monitor() {
 	pscl.tv = &tv;
 	pscr.tv = &tv;
 	unsigned int userId = 0;
-	time_t start = time(NULL);
-	double avg_power_l = 0;
-	double avg_power_r = 0;
-	long int n = 0;
+	time_t start_post_timer = time(NULL);
+	int n = 0;
+
 	while (true) {
 		//memset(&pscl, 0, sizeof(powersc_t));
 		//memset(&pscr, 0, sizeof(powersc_t));
@@ -641,25 +652,28 @@ void *power_monitor() {
 		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
 		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 #endif
-		avg_power_r += pscr.realPower;
-		avg_power_l += pscl.realPower;
+		if (msgsnd(msgid, &sample, mq_msg_n, 0) < 0) {
+			perror("msgsnd failed");
+		}
+
+		realp_avg_right += pscr.realPower;
+		realp_avg_left += pscl.realPower;
 		n++;
-		if ( (time(NULL) - start) > 2) {
-			avg_power_r = avg_power_r/n;
-			avg_power_l = avg_power_l/n;
+
+		if ( (time(NULL) - start_post_timer) > 1) { // post after 1 sec
+			realp_avg_left /= n;
+			realp_avg_right /= n;
 
 			sprintf(post_str,
 					format_str,
 					get_time_sec(tv.tv_sec, tv.tv_nsec),
 					pscl.Irms,
 					pscl.Vrms,
-					avg_power_l, //pscl.realPower,
+					realp_avg_left,
 					pscr.Irms,
-					avg_power_r, //pscr.realPower,
+					realp_avg_right,
 					userId);
-			n = 0;
-			avg_power_r = 0;
-			avg_power_l = 0;
+
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post_str));
 			/* Now specify the POST data */
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_str);
@@ -669,8 +683,9 @@ void *power_monitor() {
 			if(res != CURLE_OK) {
 				fprintf(stderr, "curl_easy_perform failed: %s\n", curl_easy_strerror(res));
 			}
-			start = time(NULL);
-
+			realp_avg_right = realp_avg_left = 0;
+			n = 0;
+			start_post_timer = time(NULL);
 		}
 	}
 
