@@ -56,3 +56,6 @@ data/
 
 # python
 __pycache__/
+
+# petal models
+petal_models/
