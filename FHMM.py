@@ -324,8 +324,14 @@ class FHMM():
         with open(filename, 'rb') as in_file:
             imported_model = pk.load(in_file)
         self.model = imported_model.model
-        self.individual = imported_model.individual
-        print("Importing model trained on: ")
-        for meter in self.individual.keys():
-            print(meter.label())
-        self.meters = list(self.individual.keys())
+        od = imported_model.individual
+        from collections import OrderedDict
+        self.individual = OrderedDict()
+        self.meters = ['Electric blanket', 'water pump', 'toaster']
+        i = 0
+        for k, v in od.items():
+            self.individual[self.meters[i]] = v
+            i += 1
+        #for meter in self.individual.keys():
+        #    print(meter.label())
+        #self.meters = list(self.individual.keys())
