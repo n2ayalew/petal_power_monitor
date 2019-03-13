@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS= -I -std=c99 -Wall
+CFLAGS= -I -std=c99 -Wall -g
 LDFLAGS=-lm -lpthread -lcurl
 DEPS = measure.h spiComm.h
 
