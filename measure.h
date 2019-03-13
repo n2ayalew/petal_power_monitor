@@ -9,7 +9,7 @@
 
 #define ADC_COUNTS  (1 << ADC_BITS)
 
-#define VOLTAGE_CALIBRATION 107.7 // Calibrated at home
+#define VOLTAGE_CALIBRATION 117 // Calibrated at home
 #define VOLTAGE_CALIBRATION_SCHOOL_P1 148.8 // Calibrated at school
 #define VOLTAGE_CALIBRATION_SCHOOL_P2 59.7 // Calibrated at school
 #define CURRENT_CALIBRATION_L 2.1
