@@ -317,7 +317,7 @@ class FHMM():
         #for g, chunk in down_sampled:
         #chunk = mains.resample('s').mean()  // 10**9
         chunk = mains.resample('s').mean()
-        print(chunk.head())
+        #print(chunk.head())
         predictions = self.disaggregate_chunk(chunk)
         output_datastore = output_datastore.append(predictions)
         return output_datastore

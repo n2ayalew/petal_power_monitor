@@ -1,7 +1,13 @@
+#!/usr/bin/env python
+
 # importing the requests library 
 import requests 
 import json
 import time
+import stat
+import sysv_ipc
+import struct 
+from scipy import stats
 
 try:
     import cPickle as pk
@@ -35,14 +41,16 @@ def load_aggregate_data(samples):
     #df = pd.read_csv(filename, sep=' ', names=['timestamp', channel], , header=None)
     df = pd.DataFrame(samples, dtype=np.float64, columns=['timestamp', 'power'])
     df.dropna(inplace=True)
+    #print(df[(np.abs(stats.zscore(df)) >= 3).all(axis=1)])
+    #print(df.head())
     df = df[(np.abs(stats.zscore(df)) < 3).all(axis=1)] # remove outliers
     df.dropna(inplace=True)
     df['timestamp'] = df['timestamp'] - df['timestamp'][0] 
     df = df.set_index(['timestamp'])
     #df.index = pd.to_datetime(df.index, unit='s')
     df.index = pd.to_timedelta(df.index, unit='s')
-    df = df.resample("s").mean().interpolate(method='linear')
-    df.index = df.index.astype(np.uint64) // 10**9
+    df = df.resample("s").mean().interpolate(method='linear') // 10**9
+    #df.index = df.index.astype(np.uint64) // 10**9
     #df['timestamp'] = agg_df['timestamp'].map(convert_to_datetime)
     #df = df.set_index('date').drop('unix_date', axis = 1)
     return df
@@ -67,6 +75,10 @@ try:
 except ExistentialError:
     print("ERROR: message queue creation failed")
 
+if mq.current_messages > 0:
+    mq.remove()
+    mq = sysv_ipc.MessageQueue(QueueKey, sysv_ipc.IPC_CREAT, mode=0o666)
+
 disaggregation_running = True
 disaggregate_delay_sec = 120
 #timestamps = np.zeros(5000, dtype=np.float64)
@@ -78,12 +90,12 @@ while (disaggregation_running):
 
     mq_msg, priority = mq.receive(type=1)
     ts_sec_f, power_f = struct.unpack("dd", mq_msg)
-    samples['timestamps'].append(ts_sec_f)
+    samples['timestamp'].append(ts_sec_f)
     samples['power'].append(power_f)
     #timestamps[i] = ts_sec_f
     #power[i] = power_f
     #i += 1
-
+    print(samples)
     if (time.time() - disaggregate_timer_start):
         predictions = pd.DataFrame()
         aggregate_signal = load_aggregate_data(samples)
@@ -101,8 +113,10 @@ while (disaggregation_running):
                   
         # extracting response text  
         resp = r.text 
-        print("Response:%s" % resp)
-        samples['timestamps'].clear()
+        #print("Response:%s" % resp)
+        samples['timestamp'].clear()
         samples['power'].clear()
+        
         disaggregate_timer_start = time.time()
 
+mq.remove()
