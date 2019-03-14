@@ -626,6 +626,10 @@ void *power_monitor() {
 	pscl.tv = &tv;
 	pscr.tv = &tv;
 	unsigned int userId = 0;
+	time_t start = time(NULL);
+	double avg_power_l = 0;
+	double avg_power_r = 0;
+	long int n = 0;
 	while (true) {
 		//memset(&pscl, 0, sizeof(powersc_t));
 		//memset(&pscr, 0, sizeof(powersc_t));
@@ -637,24 +641,36 @@ void *power_monitor() {
 		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
 		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 #endif
-		sprintf(post_str,
-				format_str,
-				get_time_sec(tv.tv_sec, tv.tv_nsec),
-				pscl.Irms,
-				pscl.Vrms,
-				pscl.realPower,
-				pscr.Irms,
-				pscr.realPower,
-				userId);
+		avg_power_r += pscr.realPower;
+		avg_power_l += pscl.realPower;
+		n++;
+		if ( (time(NULL) - start) > 2) {
+			avg_power_r = avg_power_r/n;
+			avg_power_l = avg_power_l/n;
 
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post_str));
-		/* Now specify the POST data */
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_str);
-		/* Perform the request, res will get the return code */ 
-		res = curl_easy_perform(curl);
-		/* Check for errors */ 
-		if(res != CURLE_OK) {
-			fprintf(stderr, "curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+			sprintf(post_str,
+					format_str,
+					get_time_sec(tv.tv_sec, tv.tv_nsec),
+					pscl.Irms,
+					pscl.Vrms,
+					avg_power_l, //pscl.realPower,
+					pscr.Irms,
+					avg_power_r, //pscr.realPower,
+					userId);
+			n = 0;
+			avg_power_r = 0;
+			avg_power_l = 0;
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post_str));
+			/* Now specify the POST data */
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_str);
+			/* Perform the request, res will get the return code */ 
+			res = curl_easy_perform(curl);
+			/* Check for errors */ 
+			if(res != CURLE_OK) {
+				fprintf(stderr, "curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+			}
+			start = time(NULL);
+
 		}
 	}
 
