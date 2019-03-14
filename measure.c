@@ -652,7 +652,10 @@ void *power_monitor() {
 		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
 		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 #endif
-		if (msgsnd(msgid, &sample, mq_msg_n, 0) < 0) {
+		sample.sample[0] = get_time_sec(tv.tv_sec, tv.tv_nsec);
+		sample.sample[1] = pscl.realPower;
+
+		if (msgsnd(msgid, &sample, mq_msg_n, IPC_NOWAIT) < 0) {
 			perror("msgsnd failed");
 		}
 
@@ -660,7 +663,7 @@ void *power_monitor() {
 		realp_avg_left += pscl.realPower;
 		n++;
 
-		if ( (time(NULL) - start_post_timer) > 1) { // post after 1 sec
+		if ( (time(NULL) - start_post_timer) > 2) { // post after 1 sec
 			realp_avg_left /= n;
 			realp_avg_right /= n;
 
