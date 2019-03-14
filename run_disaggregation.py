@@ -8,6 +8,7 @@ import stat
 import sysv_ipc
 import struct 
 from scipy import stats
+import sys
 
 try:
     import cPickle as pk
@@ -39,10 +40,10 @@ def load_aggregate_data(samples):
     #filename = filepath + '/' + house + '/' + channel + '.dat'
     #agg_df = pd.read_table(filename, sep=' ',header= None,names = ['unix_date',channel])
     #df = pd.read_csv(filename, sep=' ', names=['timestamp', channel], , header=None)
-    df = pd.DataFrame(samples, dtype=np.float64, columns=['timestamp', 'power'])
+    #df = pd.DataFrame(samples, dtype=np.float32, columns=['timestamp', 'power'])
+    df = pd.DataFrame.from_dict(data=samples, dtype=np.float32)
     df.dropna(inplace=True)
     #print(df[(np.abs(stats.zscore(df)) >= 3).all(axis=1)])
-    #print(df.head())
     df = df[(np.abs(stats.zscore(df)) < 3).all(axis=1)] # remove outliers
     df.dropna(inplace=True)
     df['timestamp'] = df['timestamp'] - df['timestamp'][0] 
@@ -79,28 +80,39 @@ if mq.current_messages > 0:
     mq.remove()
     mq = sysv_ipc.MessageQueue(QueueKey, sysv_ipc.IPC_CREAT, mode=0o666)
 
+try:
+    sem = sysv_ipc.Semaphore(16, sysv_ipc.IPC_CREAT, mode=0o666, initial_value=0)
+except ExistentialError:
+    print("ERROR: semaphore creation failed")
+
 disaggregation_running = True
-disaggregate_delay_sec = 120
+disaggregate_delay_sec = 60
 #timestamps = np.zeros(5000, dtype=np.float64)
 #power = np.zeros(5000, dtype=np.float64)
 samples = {'timestamp': [], 'power': []}
 i = 0
+
+
+sem.acquire()
+sem.remove()
+
 disaggregate_timer_start = time.time()
 while (disaggregation_running):
 
     mq_msg, priority = mq.receive(type=1)
-    ts_sec_f, power_f = struct.unpack("dd", mq_msg)
-    samples['timestamp'].append(ts_sec_f)
-    samples['power'].append(power_f)
+    ts_sec_f, power_f = struct.unpack("ff", mq_msg)
+    if (ts_sec_f > 0):
+        samples['timestamp'].append(ts_sec_f)
+        samples['power'].append(power_f)
     #timestamps[i] = ts_sec_f
     #power[i] = power_f
     #i += 1
-    print(samples)
-    if (time.time() - disaggregate_timer_start):
+    if ( (time.time() - disaggregate_timer_start) > disaggregate_delay_sec):
         predictions = pd.DataFrame()
         aggregate_signal = load_aggregate_data(samples)
         predictions = fhmm.disaggregate(aggregate_signal, predictions, 1)
         predictions.columns = ['hair iron', 'hair dryer', 'toaster']
+        print('Disaggregation Complete')
 
         # data to be sent to api 
         data = { 'toaster': predictions['toaster'].tolist(), 
@@ -113,7 +125,7 @@ while (disaggregation_running):
                   
         # extracting response text  
         resp = r.text 
-        #print("Response:%s" % resp)
+        print("Response:%s" % resp)
         samples['timestamp'].clear()
         samples['power'].clear()
         

@@ -13,6 +13,11 @@
 #include <semaphore.h>
 #include <curl/curl.h>
 
+#include <sys/ipc.h> 
+#include <sys/sem.h>
+#include <sys/types.h>
+#include <sys/msg.h> 
+
 // run helgrind to check deadlock conditions
 
 #include "spiComm.h"
@@ -209,6 +214,9 @@ int main(int argc, char *argv[])
 	parse_opts(argc, argv);
 
 	printf("default crossings: %d\n", default_crossings);
+
+	// set uid so we can use system facilities
+	setuid( 0 );
 
 	// Configure the interface.
 	// channel indicates chip select,
@@ -585,6 +593,17 @@ static size_t curl_write_cb(char * ptr, size_t size, size_t nmemb, void *userdat
 	return size * nmemb;
 }
 
+struct s {
+	float ts;
+	float p;
+};
+
+typedef struct {
+	long type;
+	struct s sample;
+	//double sample[2];
+} sample_t;
+
 void *power_monitor() {
 	powersc_t pscl = {0};
 	powersc_t pscr = {0};
@@ -594,7 +613,7 @@ void *power_monitor() {
 	int msgid;
 	sample_t sample;
 	sample.type = 1;
-	size_t mq_msg_n = sizeof(double) * 2;
+	size_t mq_msg_n = sizeof(float) * 2;
 	// msgget creates a message queue 
 	// and returns identifier 
 	if ((msgid = msgget(key, 0666 | IPC_CREAT)) < 0) {
@@ -641,6 +660,10 @@ void *power_monitor() {
 	time_t start_post_timer = time(NULL);
 	int n = 0;
 
+	bool first_sample = true;
+	int semid = semget(16, 1, IPC_CREAT | 0666);
+	struct sembuf sem_unlock = {0, 1, SEM_UNDO };
+	
 	while (true) {
 		//memset(&pscl, 0, sizeof(powersc_t));
 		//memset(&pscr, 0, sizeof(powersc_t));
@@ -648,12 +671,28 @@ void *power_monitor() {
 		pscl.Vrms = 0; pscr.Vrms = 0;
 		pscl.Irms = 0; pscr.Irms = 0;
 		calcVI(default_crossings, &pscl, &pscr, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
+
+		if (first_sample) {
+			semop(semid, &sem_unlock, 1);
+			first_sample = false;
+			printf("first sample\n");
+		}
+
+		if (pscl.realPower > 10000) {
+			printf("dropping sample: ");
+			printf("ts = %f, ", get_time_sec(tv.tv_sec, tv.tv_nsec));
+			printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
+			printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
+			continue;
+		}
+		
 #if POWER_DEBUG
+		printf("ts = %f, ", get_time_sec(tv.tv_sec, tv.tv_nsec));
 		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
 		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 #endif
-		sample.sample[0] = get_time_sec(tv.tv_sec, tv.tv_nsec);
-		sample.sample[1] = pscl.realPower;
+		sample.sample.ts = (float)get_time_sec(tv.tv_sec, tv.tv_nsec);
+		sample.sample.p = (float)pscl.realPower;
 
 		if (msgsnd(msgid, &sample, mq_msg_n, IPC_NOWAIT) < 0) {
 			perror("msgsnd failed");
