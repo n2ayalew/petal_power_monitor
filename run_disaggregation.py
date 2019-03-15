@@ -41,16 +41,19 @@ def load_aggregate_data(samples):
     #agg_df = pd.read_table(filename, sep=' ',header= None,names = ['unix_date',channel])
     #df = pd.read_csv(filename, sep=' ', names=['timestamp', channel], , header=None)
     #df = pd.DataFrame(samples, dtype=np.float32, columns=['timestamp', 'power'])
-    df = pd.DataFrame.from_dict(data=samples, dtype=np.float32)
-    df.dropna(inplace=True)
+    #df = pd.DataFrame.from_dict(data=samples, dtype=np.float32)
+    df = pd.DataFrame(samples, columns=['timestamp', 'power'])
+    df = df.dropna()
     #print(df[(np.abs(stats.zscore(df)) >= 3).all(axis=1)])
     df = df[(np.abs(stats.zscore(df)) < 3).all(axis=1)] # remove outliers
     df.dropna(inplace=True)
     df['timestamp'] = df['timestamp'] - df['timestamp'][0] 
     df = df.set_index(['timestamp'])
+    #print(df)
     #df.index = pd.to_datetime(df.index, unit='s')
     df.index = pd.to_timedelta(df.index, unit='s')
-    df = df.resample("s").mean().interpolate(method='linear') // 10**9
+    df = df.resample("s").mean().interpolate(method='linear')
+    #print(df)
     #df.index = df.index.astype(np.uint64) // 10**9
     #df['timestamp'] = agg_df['timestamp'].map(convert_to_datetime)
     #df = df.set_index('date').drop('unix_date', axis = 1)
@@ -94,32 +97,41 @@ i = 0
 
 
 sem.acquire()
-sem.remove()
+#sem.remove()
 
 disaggregate_timer_start = time.time()
 while (disaggregation_running):
 
     mq_msg, priority = mq.receive(type=1)
-    ts_sec_f, power_f = struct.unpack("ff", mq_msg)
-    if (ts_sec_f > 0):
-        samples['timestamp'].append(ts_sec_f)
+    ts_sec_u, ts_nsec_u, power_f = struct.unpack("IIf", mq_msg)
+    ts_nsec_u = ts_nsec_u / 1000000000.0
+    ts_f = ts_nsec_u + ts_sec_u
+
+#    print('ts = %f, ts_nsec = %f, p = %f' % (ts_f, ts_nsec_u, power_f))
+
+    if (ts_sec_u > 0):
+        samples['timestamp'].append(ts_f)
         samples['power'].append(power_f)
+
     #timestamps[i] = ts_sec_f
     #power[i] = power_f
     #i += 1
+
     if ( (time.time() - disaggregate_timer_start) > disaggregate_delay_sec):
+        print('Using %d samples' % (len(samples['power'])))
         predictions = pd.DataFrame()
         aggregate_signal = load_aggregate_data(samples)
         predictions = fhmm.disaggregate(aggregate_signal, predictions, 1)
-        predictions.columns = ['hair iron', 'hair dryer', 'toaster']
+        #predictions.columns = ['hair iron', 'hair dryer', 'toaster']
         print('Disaggregation Complete')
 
         # data to be sent to api 
         data = { 'toaster': predictions['toaster'].tolist(), 
-                'hair dryer': predictions['hair dryer'].tolist(), 
-                'hair iron': predictions['hair iron'].tolist() 
+                'hair dryer': predictions['water pump'].tolist(), 
+                'hair iron': predictions['Electric blanket'].tolist() 
                 } 
 
+        print(data)
         # sending post request and saving response as response object 
         r = requests.post(url = URL, json = data) 
                   

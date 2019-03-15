@@ -30,7 +30,7 @@
 #define ADC_FREQ 500000
 #define VIN_FREQ 60
 //#define max_samples ((size_t)((1.0/VIN_FREQ)/(1.0/ADC_FREQ)) * 2)
-#define max_samples 300000 //16667
+#define max_samples 500000 //16667
 
 static void parse_opts(int argc, char *argv[]);
 void powerMonitorTest();
@@ -415,7 +415,8 @@ void calcVI(unsigned int crossings, powersc_t *powerl_p, powersc_t *powerr_p, ui
 		sem_wait(&buf_empty);
 		startV = analogRead(inPinV); // using the voltage waveform
 		sem_post(&buf_full);
-		if ((startV < (ADC_COUNTS*0.55)) && (startV > (ADC_COUNTS*0.45))) break;  //check its within range
+		//if ((startV < (ADC_COUNTS*0.55)) && (startV > (ADC_COUNTS*0.45))) break;  //check its within range
+		if ((startV < (ADC_COUNTS*0.75)) && (startV > (ADC_COUNTS*0.25))) break;  //check its within range
 		//if ((millis()-start)>timeout) break;
 	}
 
@@ -594,7 +595,8 @@ static size_t curl_write_cb(char * ptr, size_t size, size_t nmemb, void *userdat
 }
 
 struct s {
-	float ts;
+	uint32_t ts;
+	uint32_t ts_nsec;
 	float p;
 };
 
@@ -613,7 +615,8 @@ void *power_monitor() {
 	int msgid;
 	sample_t sample;
 	sample.type = 1;
-	size_t mq_msg_n = sizeof(float) * 2;
+	size_t mq_msg_n = 12;//sizeof(float) * 2;
+	//size_t mq_msg_n = sizeof(double) * 2;
 	// msgget creates a message queue 
 	// and returns identifier 
 	if ((msgid = msgget(key, 0666 | IPC_CREAT)) < 0) {
@@ -685,14 +688,18 @@ void *power_monitor() {
 			printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 			continue;
 		}
-		
+		sample.sample.ts = tv.tv_sec;//(float)get_time_sec(tv.tv_sec, tv.tv_nsec);
+		sample.sample.ts_nsec = tv.tv_nsec;//(float)get_time_sec(tv.tv_sec, tv.tv_nsec);
+		sample.sample.p = (float)pscl.realPower;
 #if POWER_DEBUG
-		printf("ts = %f, ", get_time_sec(tv.tv_sec, tv.tv_nsec));
+		printf("ts_sec = %u, ts_nsec = %u, ", sample.sample.ts);//get_time_sec(tv.tv_sec, tv.tv_nsec));
 		printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
 		printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 #endif
-		sample.sample.ts = (float)get_time_sec(tv.tv_sec, tv.tv_nsec);
-		sample.sample.p = (float)pscl.realPower;
+		
+		
+		//sample.sample.ts = get_time_sec(tv.tv_sec, tv.tv_nsec);
+		//sample.sample.p = pscl.realPower;
 
 		if (msgsnd(msgid, &sample, mq_msg_n, IPC_NOWAIT) < 0) {
 			perror("msgsnd failed");
@@ -702,7 +709,7 @@ void *power_monitor() {
 		realp_avg_left += pscl.realPower;
 		n++;
 
-		if ( (time(NULL) - start_post_timer) > 2) { // post after 1 sec
+		if ( (time(NULL) - start_post_timer) > 3) { // post after 1 sec
 			realp_avg_left /= n;
 			realp_avg_right /= n;
 
@@ -760,6 +767,7 @@ void *data_collector() {
 		pscl.Irms = 0; pscr.Irms = 0;
 		calcVI(default_crossings, &pscl, &pscr, PT_CHANNEL, CTL_CHANNEL, CTR_CHANNEL);
 		if (debug_mode) {
+			printf("ts = %f, ", get_time_sec(tv.tv_sec, tv.tv_nsec));
 			printf("Vrms = %f, Irms Left = %f, Pl = %f, ", pscl.Vrms, pscl.Irms, pscl.realPower);
 			printf("Vrms = %f, Irms Right = %f, Pr = %f\n", pscr.Vrms, pscr.Irms, pscr.realPower);
 		} else {
